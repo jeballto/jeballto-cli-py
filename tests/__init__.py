@@ -1,0 +1,1 @@
+"""Jeballto CLI test suite."""
