@@ -298,7 +298,7 @@ def execute(
     user: Annotated[str, typer.Option("--user", help="SSH user.")] = "admin",
     password: Annotated[str | None, typer.Option("--password", help="SSH password.")] = None,
     timeout: Annotated[
-        int | None, typer.Option("--timeout", help="Command timeout in seconds.")
+        int | None, typer.Option("--timeout", min=1, max=600, help="Command timeout in seconds.")
     ] = None,
 ) -> None:
     """Execute a command inside a VM via SSH."""
@@ -330,7 +330,7 @@ def execute_alias(
     user: Annotated[str, typer.Option("--user", help="SSH user.")] = "admin",
     password: Annotated[str | None, typer.Option("--password", help="SSH password.")] = None,
     timeout: Annotated[
-        int | None, typer.Option("--timeout", help="Command timeout in seconds.")
+        int | None, typer.Option("--timeout", min=1, max=600, help="Command timeout in seconds.")
     ] = None,
 ) -> None:
     """Execute a command inside a VM via SSH (alias for 'execute')."""

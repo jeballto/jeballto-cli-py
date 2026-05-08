@@ -111,7 +111,9 @@ def wipe(
 def pull(
     ctx: typer.Context,
     reference: Annotated[str, typer.Argument(help="Image reference (e.g. registry/image:tag).")],
-    timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in seconds.")] = None,
+    timeout: Annotated[
+        int | None, typer.Option("--timeout", min=1, help="Timeout in seconds.")
+    ] = None,
 ) -> None:
     """Pull an OCI image from a registry."""
     context = require_context(ctx)
@@ -132,7 +134,9 @@ def push(
     image: Annotated[
         str | None, typer.Option("--image", help="Source image identifier (UUID).")
     ] = None,
-    timeout: Annotated[int | None, typer.Option("--timeout", help="Timeout in seconds.")] = None,
+    timeout: Annotated[
+        int | None, typer.Option("--timeout", min=1, help="Timeout in seconds.")
+    ] = None,
 ) -> None:
     """Push an image to an OCI registry.
 

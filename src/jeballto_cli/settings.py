@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_BASE_URL = "http://localhost:8011/v1"
-DEFAULT_TIMEOUT = 120.0
+DEFAULT_TIMEOUT: float | None = None
 DEFAULT_AGENT_CONFIG_PATH = Path.home() / "Library/Application Support/Jeballto/config.json"
 
 
@@ -23,7 +23,7 @@ class OutputFormat(StrEnum):
 class Settings:
     base_url: str
     token: str | None
-    timeout: float
+    timeout: float | None
     insecure: bool
     output: OutputFormat
     config_file: Path
@@ -176,6 +176,7 @@ def load_settings(
         or agent_token
     )
 
+    resolved_timeout: float | None
     if timeout is not None:
         resolved_timeout = timeout
     elif env_timeout is not None:

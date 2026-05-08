@@ -61,6 +61,12 @@ def test_image_pull(invoke: Any) -> None:
     assert "pulled" in result.output.lower() or "registry" in result.output.lower()
 
 
+def test_image_pull_with_timeout(invoke: Any) -> None:
+    """Pull an image with command timeout."""
+    result = invoke(["image", "pull", "registry.example.com/image:latest", "--timeout", "3600"])
+    assert result.exit_code == 0
+
+
 def test_image_push_with_vm(invoke: Any) -> None:
     """Push an image from a VM source."""
     result = invoke(

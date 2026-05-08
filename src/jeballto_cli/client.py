@@ -10,6 +10,22 @@ from jeballto_cli import __version__
 from jeballto_cli.settings import Settings
 
 JSONValue = dict[str, Any] | list[Any] | str | int | float | bool | bytes | None
+REQUEST_TIMEOUT_CUSHION = 30.0
+VM_EXECUTE_MAX_TIMEOUT = 600
+
+
+def _operation_request_timeout(
+    timeout: int | None,
+    *,
+    max_timeout: int | None = None,
+) -> float | None:
+    if timeout is None:
+        return None
+    if timeout < 1:
+        raise ValueError("timeout must be at least 1 second")
+    if max_timeout is not None and timeout > max_timeout:
+        raise ValueError(f"timeout must be between 1 and {max_timeout} seconds")
+    return timeout + REQUEST_TIMEOUT_CUSHION
 
 
 class APIError(Exception):
@@ -95,6 +111,7 @@ class JeballtoClient:
         expected_status: int | set[int] | None = None,
         expect_binary: bool = False,
         headers: dict[str, str] | None = None,
+        request_timeout: float | None = None,
     ) -> JSONValue | bytes | None:
         """Send an HTTP request to the agent API.
 
@@ -106,6 +123,7 @@ class JeballtoClient:
             expected_status: Acceptable status code(s).
             expect_binary: If ``True``, return raw bytes instead of JSON.
             headers: Extra request headers.
+            request_timeout: Optional HTTP transport timeout in seconds.
 
         Returns:
             Parsed JSON, raw bytes, plain text, or ``None`` for 204 responses.
@@ -116,13 +134,26 @@ class JeballtoClient:
         request_headers = headers or {}
 
         try:
-            response = self._client.request(
-                method=method,
-                url=path,
-                params=params,
-                json=json_body,
-                headers=request_headers,
-            )
+            kwargs: dict[str, Any] = {
+                "method": method,
+                "url": path,
+                "params": params,
+                "json": json_body,
+                "headers": request_headers,
+            }
+            if request_timeout is not None:
+                kwargs["timeout"] = request_timeout
+            response = self._client.request(**kwargs)
+        except httpx.TimeoutException as exc:
+            details = None
+            if request_timeout is not None:
+                details = {"timeout": str(request_timeout)}
+            raise APIError(
+                status_code=0,
+                code="REQUEST_TIMEOUT",
+                message="Request timed out",
+                details=details,
+            ) from exc
         except httpx.HTTPError as exc:
             raise APIError(
                 status_code=0,
@@ -495,7 +526,13 @@ class JeballtoClient:
             body["password"] = password
         if timeout is not None:
             body["timeout"] = timeout
-        return self.request("POST", f"/vms/{vm_id}/execute", json_body=body)
+        request_timeout = _operation_request_timeout(timeout, max_timeout=VM_EXECUTE_MAX_TIMEOUT)
+        return self.request(
+            "POST",
+            f"/vms/{vm_id}/execute",
+            json_body=body,
+            request_timeout=request_timeout,
+        )
 
     def keystrokes(self, vm_id: str, keys: list[str]) -> JSONValue:
         """Inject keystrokes into a VM.
@@ -755,7 +792,8 @@ class JeballtoClient:
         body: dict[str, Any] = {"reference": reference}
         if timeout is not None:
             body["timeout"] = timeout
-        return self.request("POST", "/images/pull", json_body=body)
+        request_timeout = _operation_request_timeout(timeout)
+        return self.request("POST", "/images/pull", json_body=body, request_timeout=request_timeout)
 
     def push_image(
         self,
@@ -777,7 +815,8 @@ class JeballtoClient:
         body: dict[str, Any] = {"reference": reference, "source": source}
         if timeout is not None:
             body["timeout"] = timeout
-        return self.request("POST", "/images/push", json_body=body)
+        request_timeout = _operation_request_timeout(timeout)
+        return self.request("POST", "/images/push", json_body=body, request_timeout=request_timeout)
 
     # -- registries ---------------------------------------------------------
 

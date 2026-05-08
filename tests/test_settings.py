@@ -35,7 +35,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     )
     assert settings.base_url == "http://localhost:8011/v1"
     assert settings.token is None
-    assert settings.timeout == 120.0
+    assert settings.timeout is None
     assert settings.insecure is False
     assert settings.output == OutputFormat.TABLE
 
