@@ -85,8 +85,8 @@ IMAGE_PUSH_RESPONSE = {
 
 WIPE_RESPONSE = {"deleted": 2, "failed": 0}
 
-SSH_INFO_RESPONSE = {"host": "localhost", "port": 2222, "status": "enabled", "user": "admin"}
-VNC_INFO_RESPONSE = {"host": "localhost", "port": 5900, "status": "enabled"}
+SSH_INFO_RESPONSE = {"host": "localhost", "port": 2222, "status": "ready", "user": "admin"}
+VNC_INFO_RESPONSE = {"host": "localhost", "port": 5900, "status": "ready"}
 GUI_STATUS_RESPONSE = {"vmId": VM_RESPONSE["id"], "guiOpen": True}
 
 INSTALL_STATUS_RESPONSE = {

@@ -35,6 +35,18 @@ def test_vm_create_ephemeral(invoke: Any) -> None:
     assert result.exit_code == 0
 
 
+def test_vm_create_rejects_cpu_below_api_min(invoke: Any) -> None:
+    """Create rejects CPU count below OpenAPI minimum."""
+    result = invoke(["vm", "create", "bad-vm", "--cpu", "0"])
+    assert result.exit_code != 0
+
+
+def test_vm_create_rejects_lifetime_above_api_max(invoke: Any) -> None:
+    """Create rejects lifetime above OpenAPI maximum."""
+    result = invoke(["vm", "create", "bad-vm", "--lifetime", "604801"])
+    assert result.exit_code != 0
+
+
 def test_vm_create_image_with_resources(invoke: Any) -> None:
     """Create from image and patch resources afterward."""
     result = invoke(
@@ -89,6 +101,12 @@ def test_vm_list_alias(invoke: Any) -> None:
     result = invoke(["vm", "ls"])
     assert result.exit_code == 0
     assert "test-vm" in result.output
+
+
+def test_vm_list_rejects_invalid_pagination(invoke: Any) -> None:
+    """List rejects pagination values outside OpenAPI bounds."""
+    assert invoke(["vm", "list", "--limit", "0"]).exit_code != 0
+    assert invoke(["vm", "list", "--offset", "-1"]).exit_code != 0
 
 
 def test_vm_get(invoke: Any) -> None:
@@ -195,6 +213,12 @@ def test_vm_events(invoke: Any) -> None:
     assert "VM_CREATED" in result.output
 
 
+def test_vm_events_rejects_limit_above_api_max(invoke: Any) -> None:
+    """Events rejects limit above OpenAPI maximum."""
+    result = invoke(["vm", "events", VM_ID, "--limit", "1001"])
+    assert result.exit_code != 0
+
+
 def test_vm_list_json(invoke: Any) -> None:
     """List VMs with JSON output."""
     result = invoke(["--output", "json", "vm", "list"])
@@ -210,6 +234,7 @@ def test_vm_ssh_info(invoke: Any) -> None:
     result = invoke(["vm", "ssh", "info", VM_ID])
     assert result.exit_code == 0
     assert "2222" in result.output
+    assert "ready" in result.output
 
 
 def test_vm_ssh_enable(invoke: Any) -> None:
@@ -232,6 +257,7 @@ def test_vm_vnc_info(invoke: Any) -> None:
     result = invoke(["vm", "vnc", "info", VM_ID])
     assert result.exit_code == 0
     assert "5900" in result.output
+    assert "ready" in result.output
 
 
 def test_vm_vnc_enable(invoke: Any) -> None:

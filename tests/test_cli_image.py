@@ -22,6 +22,12 @@ def test_image_ls_alias(invoke: Any) -> None:
     assert result.exit_code == 0
 
 
+def test_image_list_rejects_invalid_pagination(invoke: Any) -> None:
+    """List rejects pagination values outside OpenAPI bounds."""
+    assert invoke(["image", "list", "--limit", "0"]).exit_code != 0
+    assert invoke(["image", "list", "--offset", "-1"]).exit_code != 0
+
+
 def test_image_get(invoke: Any) -> None:
     """Get image details."""
     result = invoke(["--output", "json", "image", "get", IMAGE_ID])

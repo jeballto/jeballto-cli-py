@@ -10,6 +10,7 @@ from jeballto_cli import __version__
 from jeballto_cli.settings import Settings
 
 JSONValue = dict[str, Any] | list[Any] | str | int | float | bool | bytes | None
+ResourceSize = str | int
 REQUEST_TIMEOUT_CUSHION = 30.0
 VM_EXECUTE_MAX_TIMEOUT = 600
 
@@ -273,8 +274,8 @@ class JeballtoClient:
         name: str,
         *,
         cpu: int | None = None,
-        memory: str | None = None,
-        disk: str | None = None,
+        memory: ResourceSize | None = None,
+        disk: ResourceSize | None = None,
         image: str | None = None,
         ephemeral: bool | None = None,
         lifetime_seconds: int | None = None,
@@ -320,8 +321,8 @@ class JeballtoClient:
         *,
         name: str | None = None,
         cpu: int | None = None,
-        memory: str | None = None,
-        disk: str | None = None,
+        memory: ResourceSize | None = None,
+        disk: ResourceSize | None = None,
     ) -> JSONValue:
         """Update VM name and/or resources (PATCH).
 
@@ -459,8 +460,8 @@ class JeballtoClient:
         name: str,
         *,
         cpu: int | None = None,
-        memory: str | None = None,
-        disk: str | None = None,
+        memory: ResourceSize | None = None,
+        disk: ResourceSize | None = None,
         force: bool = False,
         ephemeral: bool | None = None,
     ) -> JSONValue:
@@ -866,8 +867,8 @@ class JeballtoClient:
         *,
         source: str | None = None,
         cpu: int | None = None,
-        memory: str | None = None,
-        disk: str | None = None,
+        memory: ResourceSize | None = None,
+        disk: ResourceSize | None = None,
     ) -> JSONValue:
         """Execute a Jeballtofile blueprint.
 

@@ -16,10 +16,11 @@ app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
 def list_images(
     ctx: typer.Context,
     limit: Annotated[
-        int | None, typer.Option("--limit", "-l", help="Max results to return (1-1000).")
+        int | None,
+        typer.Option("--limit", "-l", min=1, max=1000, help="Max results to return (1-1000)."),
     ] = None,
     offset: Annotated[
-        int | None, typer.Option("--offset", help="Number of results to skip.")
+        int | None, typer.Option("--offset", min=0, help="Number of results to skip.")
     ] = None,
 ) -> None:
     """List all OCI images."""
@@ -40,10 +41,11 @@ def list_images(
 def list_images_alias(
     ctx: typer.Context,
     limit: Annotated[
-        int | None, typer.Option("--limit", "-l", help="Max results to return (1-1000).")
+        int | None,
+        typer.Option("--limit", "-l", min=1, max=1000, help="Max results to return (1-1000)."),
     ] = None,
     offset: Annotated[
-        int | None, typer.Option("--offset", help="Number of results to skip.")
+        int | None, typer.Option("--offset", min=0, help="Number of results to skip.")
     ] = None,
 ) -> None:
     """List all OCI images (alias for 'list')."""
