@@ -32,6 +32,15 @@ jeballto --help
 jeballto health
 ```
 
+Run from source without installing from PyPI:
+
+```bash
+git clone https://github.com/jeballto/jeballto-cli-py.git
+cd jeballto-cli-py
+uv run jeballto --help
+uv run jeballto health
+```
+
 ## Configuration
 
 Settings resolve in this order:
