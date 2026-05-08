@@ -21,6 +21,12 @@ def _capture_console() -> tuple[Console, StringIO]:
     return console, buf
 
 
+def _capture_console_width(width: int) -> tuple[Console, StringIO]:
+    buf = StringIO()
+    console = Console(file=buf, force_terminal=False, width=width)
+    return console, buf
+
+
 def test_render_none() -> None:
     """None payload renders 'OK'."""
     console, buf = _capture_console()
@@ -49,6 +55,60 @@ def test_render_list_table() -> None:
     output = buf.getvalue()
     assert "a" in output
     assert "b" in output
+
+
+def test_render_dict_table_wraps_long_values_without_ellipsis() -> None:
+    """Long dict values wrap instead of truncating with ellipsis."""
+    console, buf = _capture_console_width(36)
+    render_output(
+        console,
+        {"url": "registry.example.com/very/long/path/that/keeps/going:latest"},
+        output_format=OutputFormat.TABLE,
+    )
+    output = buf.getvalue()
+    assert "…" not in output
+    assert "registry" in output
+    assert "latest" in output
+
+
+def test_render_list_table_wraps_wide_rows_without_ellipsis() -> None:
+    """Wide list rows wrap instead of truncating with ellipsis."""
+    console, buf = _capture_console_width(52)
+    render_output(
+        console,
+        [
+            {
+                "id": "550e8400-e29b-41d4-a716-446655440000",
+                "reference": "registry.example.com/vms/macos:latest",
+                "status": "downloaded-and-ready",
+            }
+        ],
+        output_format=OutputFormat.TABLE,
+    )
+    output = buf.getvalue()
+    assert "…" not in output
+    assert "550e8400" in output
+    assert "latest" in output
+    assert "downloaded" in output
+
+
+def test_render_table_unpacks_nested_values() -> None:
+    """Nested dict and list values render as readable blocks."""
+    console, buf = _capture_console()
+    render_output(
+        console,
+        {
+            "resources": {"cpuCount": 4, "memorySize": "8GB"},
+            "tags": ["ci", "macos"],
+        },
+        output_format=OutputFormat.TABLE,
+    )
+    output = buf.getvalue()
+    assert "{'cpuCount'" not in output
+    assert '{"cpuCount"' not in output
+    assert "cpuCount:" in output
+    assert "memorySize:" in output
+    assert "- ci" in output
 
 
 def test_render_empty_list() -> None:

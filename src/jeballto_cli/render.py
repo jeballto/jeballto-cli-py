@@ -14,6 +14,10 @@ from rich.table import Table
 from jeballto_cli.settings import OutputFormat
 
 
+def _add_wrapping_column(table: Table, name: str) -> None:
+    table.add_column(name, overflow="fold", no_wrap=False)
+
+
 def _scalar(value: Any) -> str:
     """Convert a single value to its string representation.
 
@@ -27,6 +31,13 @@ def _scalar(value: Any) -> str:
         return ""
     if isinstance(value, (str, int, float, bool)):
         return str(value)
+    if isinstance(value, (dict, list)):
+        return yaml.safe_dump(
+            value,
+            sort_keys=False,
+            allow_unicode=True,
+            default_flow_style=False,
+        ).strip()
     return json.dumps(value, ensure_ascii=False)
 
 
@@ -39,8 +50,8 @@ def _render_dict_table(console: Console, data: dict[str, Any], title: str | None
         title: Optional table title.
     """
     table = Table(title=title)
-    table.add_column("Field")
-    table.add_column("Value")
+    _add_wrapping_column(table, "Field")
+    _add_wrapping_column(table, "Value")
 
     for key, value in data.items():
         table.add_row(key, _scalar(value))
@@ -71,9 +82,9 @@ def _render_list_table(console: Console, rows: list[Any], title: str | None) -> 
                 if key not in ordered_columns:
                     ordered_columns.append(key)
 
-        table = Table(title=title)
+        table = Table(title=title, expand=True)
         for column in ordered_columns:
-            table.add_column(column)
+            _add_wrapping_column(table, column)
 
         for row in rows:
             assert isinstance(row, dict)
@@ -83,8 +94,8 @@ def _render_list_table(console: Console, rows: list[Any], title: str | None) -> 
         return
 
     table = Table(title=title)
-    table.add_column("#")
-    table.add_column("Value")
+    _add_wrapping_column(table, "#")
+    _add_wrapping_column(table, "Value")
     for index, row in enumerate(rows, start=1):
         table.add_row(str(index), _scalar(row))
 
