@@ -25,7 +25,7 @@ def _settings(**overrides: object) -> Settings:
     defaults = {
         "base_url": "http://test:8011/v1",
         "token": "test-token",
-        "timeout": 30.0,
+        "timeout": None,
         "insecure": False,
         "output": OutputFormat.TABLE,
         "config_file": Path("/dev/null"),
@@ -95,6 +95,20 @@ def test_api_error_on_network_failure() -> None:
     with pytest.raises(APIError) as exc_info:
         client.health()
     assert exc_info.value.code == "NETWORK_ERROR"
+    client.close()
+
+
+def test_api_error_on_timeout_failure() -> None:
+    """Client raises APIError with REQUEST_TIMEOUT on HTTP timeout."""
+
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    transport = httpx.MockTransport(failing_handler)
+    client = JeballtoClient(_settings(), transport=transport)
+    with pytest.raises(APIError) as exc_info:
+        client.health()
+    assert exc_info.value.code == "REQUEST_TIMEOUT"
     client.close()
 
 
@@ -183,6 +197,118 @@ def test_update_vm_requires_field() -> None:
     client = JeballtoClient(_settings(), transport=_transport({}))
     with pytest.raises(ValueError):
         client.update_vm("abc")
+    client.close()
+
+
+def test_execute_timeout_sets_body_and_http_timeout() -> None:
+    """execute timeout controls API body and HTTP transport timeout."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=json.dumps({"exitCode": 0, "stdout": "", "stderr": ""}).encode(),
+        )
+
+    client = JeballtoClient(_settings(), transport=httpx.MockTransport(handler))
+    client.execute("abc", "echo hello", timeout=600)
+    body = json.loads(captured[0].content)
+    assert body["timeout"] == 600
+    assert captured[0].extensions["timeout"]["read"] == 630.0
+    client.close()
+
+
+def test_execute_without_timeout_is_unlimited_by_default() -> None:
+    """execute without timeout leaves body and HTTP timeout unlimited."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=json.dumps({"exitCode": 0, "stdout": "", "stderr": ""}).encode(),
+        )
+
+    client = JeballtoClient(_settings(), transport=httpx.MockTransport(handler))
+    client.execute("abc", "echo hello")
+    body = json.loads(captured[0].content)
+    assert "timeout" not in body
+    assert captured[0].extensions["timeout"]["read"] is None
+    client.close()
+
+
+def test_execute_rejects_timeout_above_api_limit() -> None:
+    """execute rejects timeout above OpenAPI documented maximum."""
+    client = JeballtoClient(_settings(), transport=_transport({}))
+    with pytest.raises(ValueError):
+        client.execute("abc", "echo hello", timeout=601)
+    client.close()
+
+
+def test_pull_image_timeout_sets_body_and_http_timeout() -> None:
+    """pull_image timeout controls API body and HTTP transport timeout."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=json.dumps({"status": "pulled"}).encode(),
+        )
+
+    client = JeballtoClient(_settings(), transport=httpx.MockTransport(handler))
+    client.pull_image("registry.example.com/image:latest", timeout=3600)
+    body = json.loads(captured[0].content)
+    assert body["timeout"] == 3600
+    assert captured[0].extensions["timeout"]["read"] == 3630.0
+    client.close()
+
+
+def test_pull_image_without_timeout_is_unlimited_by_default() -> None:
+    """pull_image without timeout leaves body and HTTP timeout unlimited."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=json.dumps({"status": "pulled"}).encode(),
+        )
+
+    client = JeballtoClient(_settings(), transport=httpx.MockTransport(handler))
+    client.pull_image("registry.example.com/image:latest")
+    body = json.loads(captured[0].content)
+    assert "timeout" not in body
+    assert captured[0].extensions["timeout"]["read"] is None
+    client.close()
+
+
+def test_push_image_timeout_sets_body_and_http_timeout() -> None:
+    """push_image timeout controls API body and HTTP transport timeout."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=json.dumps({"status": "pushed"}).encode(),
+        )
+
+    client = JeballtoClient(_settings(), transport=httpx.MockTransport(handler))
+    client.push_image(
+        "registry.example.com/image:latest",
+        source="vm:550e8400-e29b-41d4-a716-446655440000",
+        timeout=7200,
+    )
+    body = json.loads(captured[0].content)
+    assert body["timeout"] == 7200
+    assert captured[0].extensions["timeout"]["read"] == 7230.0
     client.close()
 
 

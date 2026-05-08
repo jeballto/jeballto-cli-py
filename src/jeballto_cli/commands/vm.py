@@ -30,7 +30,9 @@ app.add_typer(gui_app, name="gui", help="GUI window management.")
 def create(
     ctx: typer.Context,
     name: Annotated[str, typer.Argument(help="VM display name.")],
-    cpu: Annotated[int | None, typer.Option("--cpu", help="Number of CPU cores.")] = None,
+    cpu: Annotated[
+        int | None, typer.Option("--cpu", min=1, max=32, help="Number of CPU cores.")
+    ] = None,
     memory: Annotated[
         str | None, typer.Option("--memory", help="Memory size (e.g. '8GB').")
     ] = None,
@@ -46,6 +48,8 @@ def create(
         int | None,
         typer.Option(
             "--lifetime",
+            min=1,
+            max=604800,
             help="Max lifetime in seconds from first RUNNING (1-604800).",
         ),
     ] = None,
@@ -79,7 +83,9 @@ def update(
     ctx: typer.Context,
     vm_id: Annotated[str, typer.Argument(help="VM identifier (UUID).")],
     name: Annotated[str | None, typer.Option("--name", "-n", help="New VM name.")] = None,
-    cpu: Annotated[int | None, typer.Option("--cpu", help="New CPU count.")] = None,
+    cpu: Annotated[
+        int | None, typer.Option("--cpu", min=1, max=32, help="New CPU count.")
+    ] = None,
     memory: Annotated[
         str | None, typer.Option("--memory", help="New memory size (e.g. '16GB').")
     ] = None,
@@ -106,10 +112,11 @@ def update(
 def list_vms(
     ctx: typer.Context,
     limit: Annotated[
-        int | None, typer.Option("--limit", "-l", help="Max results to return (1-1000).")
+        int | None,
+        typer.Option("--limit", "-l", min=1, max=1000, help="Max results to return (1-1000)."),
     ] = None,
     offset: Annotated[
-        int | None, typer.Option("--offset", help="Number of results to skip.")
+        int | None, typer.Option("--offset", min=0, help="Number of results to skip.")
     ] = None,
 ) -> None:
     """List all virtual machines."""
@@ -130,10 +137,11 @@ def list_vms(
 def list_vms_alias(
     ctx: typer.Context,
     limit: Annotated[
-        int | None, typer.Option("--limit", "-l", help="Max results to return (1-1000).")
+        int | None,
+        typer.Option("--limit", "-l", min=1, max=1000, help="Max results to return (1-1000)."),
     ] = None,
     offset: Annotated[
-        int | None, typer.Option("--offset", help="Number of results to skip.")
+        int | None, typer.Option("--offset", min=0, help="Number of results to skip.")
     ] = None,
 ) -> None:
     """List all virtual machines (alias for 'list')."""
@@ -263,7 +271,9 @@ def clone(
     ctx: typer.Context,
     vm_id: Annotated[str, typer.Argument(help="Source VM identifier (UUID).")],
     name: Annotated[str, typer.Option("--name", "-n", help="Name for the cloned VM.")],
-    cpu: Annotated[int | None, typer.Option("--cpu", help="Override CPU count.")] = None,
+    cpu: Annotated[
+        int | None, typer.Option("--cpu", min=1, max=32, help="Override CPU count.")
+    ] = None,
     memory: Annotated[
         str | None, typer.Option("--memory", help="Override memory (e.g. '8GB').")
     ] = None,
@@ -298,7 +308,7 @@ def execute(
     user: Annotated[str, typer.Option("--user", help="SSH user.")] = "admin",
     password: Annotated[str | None, typer.Option("--password", help="SSH password.")] = None,
     timeout: Annotated[
-        int | None, typer.Option("--timeout", help="Command timeout in seconds.")
+        int | None, typer.Option("--timeout", min=1, max=600, help="Command timeout in seconds.")
     ] = None,
 ) -> None:
     """Execute a command inside a VM via SSH."""
@@ -330,7 +340,7 @@ def execute_alias(
     user: Annotated[str, typer.Option("--user", help="SSH user.")] = "admin",
     password: Annotated[str | None, typer.Option("--password", help="SSH password.")] = None,
     timeout: Annotated[
-        int | None, typer.Option("--timeout", help="Command timeout in seconds.")
+        int | None, typer.Option("--timeout", min=1, max=600, help="Command timeout in seconds.")
     ] = None,
 ) -> None:
     """Execute a command inside a VM via SSH (alias for 'execute')."""
@@ -367,7 +377,9 @@ def state(
 def events(
     ctx: typer.Context,
     vm_id: Annotated[str, typer.Argument(help="VM identifier (UUID).")],
-    limit: Annotated[int, typer.Option("--limit", "-l", help="Max events (1-1000).")] = 100,
+    limit: Annotated[
+        int, typer.Option("--limit", "-l", min=1, max=1000, help="Max events (1-1000).")
+    ] = 100,
     watch: Annotated[
         bool, typer.Option("--watch", help="Continuously poll for new events.")
     ] = False,

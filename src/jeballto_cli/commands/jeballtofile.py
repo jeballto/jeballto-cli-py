@@ -52,7 +52,9 @@ def run(
             "absolute path. Required when steps include an 'install' step.",
         ),
     ] = None,
-    cpu: Annotated[int | None, typer.Option("--cpu", help="Number of CPU cores.")] = None,
+    cpu: Annotated[
+        int | None, typer.Option("--cpu", min=1, max=32, help="Number of CPU cores.")
+    ] = None,
     memory: Annotated[
         str | None, typer.Option("--memory", help="Memory size (e.g. '8GB').")
     ] = None,
@@ -113,9 +115,9 @@ def run(
             if isinstance(resources, dict):
                 if cpu is None and isinstance(resources.get("cpuCount"), int):
                     file_cpu = resources["cpuCount"]
-                if memory is None and isinstance(resources.get("memorySize"), str):
+                if memory is None and isinstance(resources.get("memorySize"), (int, str)):
                     file_memory = resources["memorySize"]
-                if disk is None and isinstance(resources.get("diskSize"), str):
+                if disk is None and isinstance(resources.get("diskSize"), (int, str)):
                     file_disk = resources["diskSize"]
         else:
             raise typer.BadParameter("Jeballtofile file must be a JSON/YAML object or array.")

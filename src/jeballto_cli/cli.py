@@ -115,7 +115,15 @@ def main() -> None:
         app()
     except APIError as exc:
         console = Console(stderr=True)
-        if exc.code == "NETWORK_ERROR":
+        if exc.code == "REQUEST_TIMEOUT":
+            timeout = ""
+            if exc.details and exc.details.get("timeout"):
+                timeout = f" after {exc.details['timeout']} seconds"
+            console.print(
+                f"[bold red]Request timed out[/]{timeout}. "
+                "Increase --timeout or JEBALLTO_TIMEOUT for long operations.",
+            )
+        elif exc.code == "NETWORK_ERROR":
             console.print(
                 f"[bold red]Connection error:[/] {exc.message}\n"
                 "Is the Jeballto agent running? Check --base-url.",
