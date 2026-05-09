@@ -15,24 +15,7 @@ Use it to manage macOS VMs, OCI VM images, registry credentials, agent config, a
 
 ## Installation
 
-```bash
-pip install jeballto-cli
-```
-
-With uv:
-
-```bash
-uv tool install jeballto-cli
-```
-
-Check the CLI:
-
-```bash
-jeballto --help
-jeballto health
-```
-
-Run from source without installing from PyPI:
+Run from source:
 
 ```bash
 git clone https://github.com/jeballto/jeballto-cli-py.git
