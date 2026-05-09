@@ -149,7 +149,7 @@ wheels = [
 
 [[package]]
 name = "jeballto-cli"
-version = "1.0.0-beta.1"
+version = "1.0.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
