@@ -3,35 +3,37 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 import yaml
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
-from jeballto_cli._context import require_context
+from jeballto_cli._context import CliContext, require_context
+from jeballto_cli.client import ResourceSize
+from jeballto_cli.errors import CLIError
+from jeballto_cli.polling import poll_status
 from jeballto_cli.render import render_output
+from jeballto_cli.ui import confirm_action, status_style
+from jeballto_cli.validation import require_int_range
 
 app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
 
+EXECUTION_TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
+DEFAULT_EXECUTION_WAIT_TIMEOUT = 9_000
 
-@app.command()
-def run(
+
+@app.command("submit")
+def submit(
     ctx: typer.Context,
     name: Annotated[
         str | None,
-        typer.Argument(
-            help="VM display name (1-100 characters). Optional when provided by --file.",
-        ),
+        typer.Argument(help="VM name. Optional when the file contains name."),
     ] = None,
     steps: Annotated[
         str | None,
-        typer.Option(
-            "--steps",
-            "-s",
-            help="JSON array of step objects to execute. Mutually exclusive with --file.",
-        ),
+        typer.Option("--steps", "-s", help="Inline steps as a JSON array."),
     ] = None,
     file: Annotated[
         Path | None,
@@ -41,233 +43,388 @@ def run(
             exists=True,
             dir_okay=False,
             readable=True,
-            help="Path to a Jeballtofile JSON/YAML file.",
+            help="Jeballtofile in JSON or YAML format.",
         ),
     ] = None,
     source: Annotated[
         str | None,
-        typer.Option(
-            "--source",
-            help="IPSW source for macOS installation steps: HTTPS URL, file:// URL, or "
-            "absolute path. Required when steps include an 'install' step.",
-        ),
+        typer.Option("--source", help="IPSW path or HTTPS URL for an install step."),
     ] = None,
-    cpu: Annotated[
-        int | None, typer.Option("--cpu", min=1, max=32, help="Number of CPU cores.")
-    ] = None,
+    cpu: Annotated[int | None, typer.Option("--cpu", help="CPU cores for the VM.")] = None,
     memory: Annotated[
-        str | None, typer.Option("--memory", help="Memory size (e.g. '8GB').")
+        str | None,
+        typer.Option("--memory", help="Memory for the VM, such as 8GB."),
     ] = None,
-    disk: Annotated[str | None, typer.Option("--disk", help="Disk size (e.g. '64GB').")] = None,
+    disk: Annotated[
+        str | None,
+        typer.Option("--disk", help="Disk size, such as 64GB."),
+    ] = None,
     wait: Annotated[
         bool,
-        typer.Option("--wait", "-w", help="Poll until execution completes or fails."),
-    ] = False,
+        typer.Option(
+            "--wait/--detach",
+            help="Watch the run, or return its execution ID immediately.",
+        ),
+    ] = True,
+    wait_timeout: Annotated[
+        int,
+        typer.Option(
+            "--wait-timeout",
+            help="Stop watching after this many seconds. The run keeps going.",
+        ),
+    ] = DEFAULT_EXECUTION_WAIT_TIMEOUT,
 ) -> None:
-    """Execute a Jeballtofile blueprint.
-
-    Creates a VM and runs all steps asynchronously. Returns immediately with an
-    execution ID for status polling, unless --wait is passed.
-
-    Example steps JSON:
-
-    \b
-    '[{"type":"start"},{"type":"execute","command":"echo hello"}]'
-    """
-    if steps is None and file is None:
-        raise typer.BadParameter("Provide exactly one of --steps or --file.")
-    if steps is not None and file is not None:
-        raise typer.BadParameter("Provide only one of --steps or --file.")
-
-    resolved_name = name
-    parsed_steps: list[Any]
-    file_source = source
-    file_cpu = cpu
-    file_memory = memory
-    file_disk = disk
-
-    if file is not None:
-        raw_content = file.read_text(encoding="utf-8")
-        try:
-            payload = (
-                json.loads(raw_content)
-                if file.suffix.lower() == ".json"
-                else yaml.safe_load(raw_content)
-            )
-        except (json.JSONDecodeError, yaml.YAMLError) as exc:
-            raise typer.BadParameter(f"Invalid file format for --file: {exc}") from exc
-
-        if isinstance(payload, list):
-            parsed_steps = payload
-        elif isinstance(payload, dict):
-            raw_steps = payload.get("steps")
-            if not isinstance(raw_steps, list):
-                raise typer.BadParameter("Jeballtofile must contain a 'steps' array.")
-            parsed_steps = raw_steps
-
-            if resolved_name is None and isinstance(payload.get("name"), str):
-                resolved_name = payload["name"]
-
-            if source is None and isinstance(payload.get("source"), str):
-                file_source = payload["source"]
-
-            resources = payload.get("resources")
-            if isinstance(resources, dict):
-                if cpu is None and isinstance(resources.get("cpuCount"), int):
-                    file_cpu = resources["cpuCount"]
-                if memory is None and isinstance(resources.get("memorySize"), (int, str)):
-                    file_memory = resources["memorySize"]
-                if disk is None and isinstance(resources.get("diskSize"), (int, str)):
-                    file_disk = resources["diskSize"]
-        else:
-            raise typer.BadParameter("Jeballtofile file must be a JSON/YAML object or array.")
-    else:
-        assert steps is not None
-        try:
-            parsed_steps = json.loads(steps)
-        except json.JSONDecodeError as exc:
-            raise typer.BadParameter(f"Invalid JSON for --steps: {exc}") from exc
-
-    if not isinstance(parsed_steps, list):
-        raise typer.BadParameter("--steps must resolve to a JSON array.")
-    if resolved_name is None:
-        raise typer.BadParameter("Name is required (argument or file field 'name').")
-
+    """Submit a Jeballtofile blueprint."""
     context = require_context(ctx)
-    data = context.client.create_jeballtofile(
+    wait_timeout = _validated_wait_timeout(wait_timeout)
+    resolved_name, parsed_steps, resolved_source, resources = _load_blueprint(
+        name=name,
+        steps=steps,
+        file=file,
+        source=source,
+        cpu=cpu,
+        memory=memory,
+        disk=disk,
+    )
+    initial = context.client.create_jeballtofile(
         resolved_name,
         parsed_steps,
-        source=file_source,
-        cpu=file_cpu,
-        memory=file_memory,
-        disk=file_disk,
+        source=resolved_source,
+        cpu=resources.get("cpu"),
+        memory=resources.get("memory"),
+        disk=resources.get("disk"),
     )
-
     if not wait:
-        render_output(
-            context.console,
-            data,
-            output_format=context.settings.output,
-            title="Jeballtofile Started",
-        )
+        _render_execution(context, initial, title="Run Submitted")
         return
 
-    execution_id = data.get("id") if isinstance(data, dict) else None
-    if not execution_id:
-        render_output(
-            context.console,
-            data,
-            output_format=context.settings.output,
-            title="Jeballtofile Started",
-        )
-        return
-
-    context.console.print(f"Waiting for execution [bold]{execution_id}[/] to finish...")
-    try:
-        while True:
-            status_data = context.client.get_jeballtofile(str(execution_id))
-            if isinstance(status_data, dict):
-                status = str(status_data.get("status", ""))
-                current = status_data.get("currentStep", 0)
-                total = status_data.get("totalSteps", 0)
-                context.console.print(
-                    f"  step {current}/{total} - {status}",
-                    highlight=False,
-                )
-                if status in ("completed", "failed", "cancelled"):
-                    render_output(
-                        context.console,
-                        status_data,
-                        output_format=context.settings.output,
-                        title="Jeballtofile Result",
-                    )
-                    if status != "completed":
-                        raise typer.Exit(code=1)
-                    return
-            time.sleep(3)
-    except KeyboardInterrupt:
-        pass
+    execution_id = _execution_id(initial)
+    result = _wait_for_execution(
+        context,
+        execution_id,
+        wait_timeout=wait_timeout,
+    )
+    _render_execution(context, result, title="Run Result")
+    if result.get("status") != "completed":
+        raise typer.Exit(code=1)
 
 
 @app.command("list")
-def list_jeballtofiles(ctx: typer.Context) -> None:
-    """List all active and recent Jeballtofile executions."""
+def list_runs(ctx: typer.Context) -> None:
+    """List recent Jeballtofile runs."""
     context = require_context(ctx)
     data = context.client.list_jeballtofiles()
-    if isinstance(data, dict):
-        render_output(
-            context.console,
-            data.get("executions", []),
-            output_format=context.settings.output,
-            title="Jeballtofile Executions",
-        )
-    else:
-        render_output(
-            context.console,
-            data,
-            output_format=context.settings.output,
-            title="Jeballtofile Executions",
-        )
-
-
-@app.command("ls", hidden=True)
-def list_jeballtofiles_alias(ctx: typer.Context) -> None:
-    """List Jeballtofile executions (alias for 'list')."""
-    list_jeballtofiles(ctx)
+    if context.human_output and isinstance(data, dict):
+        executions = data.get("executions")
+        _print_execution_list(context, executions if isinstance(executions, list) else [])
+        return
+    render_output(
+        context.console,
+        data,
+        output_format=context.settings.output,
+        title="Jeballtofile Runs",
+    )
 
 
 @app.command()
 def get(
     ctx: typer.Context,
-    execution_id: Annotated[str, typer.Argument(help="Execution identifier (UUID).")],
+    execution_id: Annotated[str, typer.Argument(help="Run ID from submit.")],
 ) -> None:
-    """Get status and per-step results of a Jeballtofile execution."""
+    """Show one Jeballtofile run."""
     context = require_context(ctx)
-    data = context.client.get_jeballtofile(execution_id)
-    render_output(
-        context.console,
-        data,
-        output_format=context.settings.output,
-        title="Jeballtofile Status",
+    _render_execution(
+        context,
+        context.client.get_jeballtofile(execution_id),
+        title="Jeballtofile Run",
     )
 
 
 @app.command()
-def delete(
+def wait(
     ctx: typer.Context,
-    execution_id: Annotated[str, typer.Argument(help="Execution identifier (UUID).")],
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt.")] = False,
+    execution_id: Annotated[str, typer.Argument(help="Run ID from submit.")],
+    wait_timeout: Annotated[
+        int,
+        typer.Option("--wait-timeout", help="Stop watching after this many seconds."),
+    ] = DEFAULT_EXECUTION_WAIT_TIMEOUT,
 ) -> None:
-    """Delete a completed, failed, or cancelled Jeballtofile execution.
-
-    Running executions cannot be deleted - cancel them first.
-    """
+    """Watch a Jeballtofile run until it finishes."""
     context = require_context(ctx)
-    if not yes:
-        typer.confirm(f"Delete Jeballtofile execution {execution_id}?", abort=True)
-    data = context.client.delete_jeballtofile(execution_id)
-    render_output(
-        context.console,
-        data,
-        output_format=context.settings.output,
-        title="Execution Deleted",
+    result = _wait_for_execution(
+        context,
+        execution_id,
+        wait_timeout=_validated_wait_timeout(wait_timeout),
     )
+    _render_execution(context, result, title="Run Result")
+    if result.get("status") != "completed":
+        raise typer.Exit(code=1)
 
 
 @app.command()
 def cancel(
     ctx: typer.Context,
-    execution_id: Annotated[str, typer.Argument(help="Execution identifier (UUID).")],
+    execution_id: Annotated[str, typer.Argument(help="Run ID from submit.")],
+    wait: Annotated[
+        bool,
+        typer.Option(
+            "--wait/--detach",
+            help="Wait for cancellation, or return after requesting it.",
+        ),
+    ] = True,
+    wait_timeout: Annotated[
+        int,
+        typer.Option("--wait-timeout", help="Stop watching after this many seconds."),
+    ] = 300,
 ) -> None:
-    """Cancel a running Jeballtofile execution.
-
-    The current step will finish before execution halts.
-    """
+    """Request cooperative cancellation of a run and its active step."""
     context = require_context(ctx)
-    data = context.client.cancel_jeballtofile(execution_id)
-    render_output(
-        context.console,
-        data,
-        output_format=context.settings.output,
-        title="Cancellation Requested",
+    response = context.client.cancel_jeballtofile(execution_id)
+    if not wait:
+        render_output(
+            context.console,
+            response,
+            output_format=context.settings.output,
+            title="Cancellation Requested",
+        )
+        return
+
+    result = _wait_for_execution(
+        context,
+        execution_id,
+        wait_timeout=_validated_wait_timeout(wait_timeout),
     )
+    _render_execution(context, result, title="Cancellation Result")
+    if result.get("status") == "failed":
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def delete(
+    ctx: typer.Context,
+    execution_id: Annotated[str, typer.Argument(help="Finished run ID.")],
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Do not ask for confirmation."),
+    ] = False,
+) -> None:
+    """Delete a completed, failed, or cancelled run record."""
+    context = require_context(ctx)
+    confirm_action(context, f"Delete Jeballtofile run {execution_id}?", yes=yes)
+    result = context.client.delete_jeballtofile(execution_id)
+    if context.human_output and isinstance(result, dict):
+        context.console.print(
+            result.get("message") or "Run deleted.",
+            highlight=False,
+            markup=False,
+        )
+    else:
+        render_output(
+            context.console,
+            result,
+            output_format=context.settings.output,
+            title="Run Deleted",
+        )
+
+
+def _load_blueprint(
+    *,
+    name: str | None,
+    steps: str | None,
+    file: Path | None,
+    source: str | None,
+    cpu: int | None,
+    memory: ResourceSize | None,
+    disk: ResourceSize | None,
+) -> tuple[str, list[dict[str, Any]], str | None, dict[str, Any]]:
+    if (steps is None) == (file is None):
+        raise typer.BadParameter("Provide exactly one of --steps or --file.")
+
+    payload: object
+    if file is not None:
+        raw = file.read_text(encoding="utf-8")
+        try:
+            payload = json.loads(raw) if file.suffix.casefold() == ".json" else yaml.safe_load(raw)
+        except (json.JSONDecodeError, yaml.YAMLError) as exc:
+            raise typer.BadParameter(f"Invalid Jeballtofile: {exc}", param_hint="--file") from exc
+    else:
+        assert steps is not None
+        try:
+            payload = json.loads(steps)
+        except json.JSONDecodeError as exc:
+            raise typer.BadParameter(f"Invalid steps JSON: {exc}", param_hint="--steps") from exc
+
+    resolved_name = name
+    resolved_source = source
+    resources: dict[str, Any] = {"cpu": cpu, "memory": memory, "disk": disk}
+    raw_steps: object
+    if isinstance(payload, list):
+        raw_steps = payload
+    elif isinstance(payload, dict):
+        raw_steps = payload.get("steps")
+        if resolved_name is None and isinstance(payload.get("name"), str):
+            resolved_name = payload["name"]
+        if resolved_source is None and isinstance(payload.get("source"), str):
+            resolved_source = payload["source"]
+        file_resources = payload.get("resources")
+        if isinstance(file_resources, dict):
+            for cli_key, api_key in (
+                ("cpu", "cpuCount"),
+                ("memory", "memorySize"),
+                ("disk", "diskSize"),
+            ):
+                if resources[cli_key] is None and isinstance(
+                    file_resources.get(api_key),
+                    (int, str),
+                ):
+                    resources[cli_key] = file_resources[api_key]
+    else:
+        raise typer.BadParameter("A Jeballtofile must be a JSON or YAML object.")
+
+    if not isinstance(raw_steps, list) or not raw_steps:
+        raise typer.BadParameter("A Jeballtofile must contain a non-empty steps array.")
+    if len(raw_steps) > 1000:
+        raise typer.BadParameter("A Jeballtofile can contain at most 1000 steps.")
+    if not all(isinstance(step, dict) for step in raw_steps):
+        raise typer.BadParameter("Every Jeballtofile step must be an object.")
+    if not resolved_name:
+        raise typer.BadParameter("Provide a VM name as an argument or in the file.")
+
+    resources["cpu"] = require_int_range(
+        resources.get("cpu"),
+        name="--cpu",
+        minimum=1,
+        maximum=32,
+    )
+    return resolved_name, raw_steps, resolved_source, resources
+
+
+def _execution_id(payload: object) -> str:
+    if isinstance(payload, dict) and isinstance(payload.get("id"), str):
+        return payload["id"]
+    raise CLIError(
+        "The agent did not return a Jeballtofile run ID.",
+        hint="Rerun with --debug and inspect the agent logs.",
+    )
+
+
+def _validated_wait_timeout(value: int) -> int:
+    return require_int_range(value, name="--wait-timeout", minimum=1, maximum=604800) or value
+
+
+def _wait_for_execution(
+    context: CliContext,
+    execution_id: str,
+    *,
+    wait_timeout: int,
+) -> dict[str, Any]:
+    with Progress(
+        TextColumn("{task.description}", markup=False),
+        BarColumn(),
+        TextColumn("{task.completed:.0f}/{task.total:.0f}"),
+        TimeElapsedColumn(),
+        console=context.error_console,
+        disable=not context.progress_enabled,
+    ) as progress:
+        task = progress.add_task("Jeballtofile", total=1)
+
+        def on_update(payload: dict[str, Any]) -> None:
+            status = str(payload.get("status") or "running")
+            total = _integer(payload.get("totalSteps"), default=1)
+            current = _display_step(payload.get("currentStep"), total, status)
+            description = f"Jeballtofile: {status}"
+            if context.progress_enabled:
+                progress.update(task, total=total, completed=current, description=description)
+            elif context.is_human:
+                context.error_console.print(
+                    f"{description} ({current}/{total})",
+                    highlight=False,
+                )
+
+        try:
+            return poll_status(
+                lambda: context.client.get_jeballtofile(execution_id),
+                operation=f"Jeballtofile run {execution_id}",
+                terminal_statuses=EXECUTION_TERMINAL_STATES,
+                timeout=wait_timeout,
+                interval=3.0,
+                on_update=on_update if context.is_human else None,
+            )
+        except KeyboardInterrupt:
+            context.error_console.print(
+                f"Run is still active. Resume with: jeballto run wait {execution_id}",
+                highlight=False,
+            )
+            raise typer.Exit(code=130) from None
+
+
+def _render_execution(context: CliContext, payload: object, *, title: str) -> None:
+    if not context.human_output or not isinstance(payload, dict):
+        render_output(
+            context.console,
+            payload,
+            output_format=context.settings.output,
+            title=title,
+        )
+        return
+
+    status = str(payload.get("status") or "unknown")
+    total = _integer(payload.get("totalSteps"), default=0)
+    current = _display_step(payload.get("currentStep"), total, status)
+    step_text = f" ({current}/{total})" if total else ""
+    context.console.print(
+        f"{title}: [{status_style(status)}]{status}[/]{step_text}",
+        highlight=False,
+    )
+    for key, label in (("id", "run"), ("vmId", "vm"), ("message", "message"), ("error", "error")):
+        value = payload.get(key)
+        if value:
+            context.console.print(f"{label}: {value}", highlight=False, markup=False)
+
+    results = payload.get("stepResults")
+    if isinstance(results, list) and results:
+        context.console.print("steps:", highlight=False)
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            index = _integer(result.get("step"), default=0) + 1
+            step_type = result.get("type") or "step"
+            step_status = result.get("status") or "unknown"
+            message = result.get("message")
+            suffix = f": {message}" if message else ""
+            context.console.print(
+                f"  {index}. {step_type}: {step_status}{suffix}",
+                highlight=False,
+                markup=False,
+            )
+
+
+def _print_execution_list(context: CliContext, executions: list[object]) -> None:
+    if not executions:
+        context.console.print("No Jeballtofile runs found.", highlight=False)
+        return
+    context.console.print("[bold]Jeballtofile Runs[/]")
+    for index, execution in enumerate(executions, start=1):
+        if not isinstance(execution, dict):
+            continue
+        status = str(execution.get("status") or "unknown")
+        total = _integer(execution.get("totalSteps"), default=0)
+        current = _display_step(execution.get("currentStep"), total, status)
+        context.console.print(
+            f"{index}. [{status_style(status)}]{status}[/] ({current}/{total})",
+            highlight=False,
+        )
+        context.console.print(f"   run: {execution.get('id') or ''}", highlight=False)
+        if execution.get("vmId"):
+            context.console.print(f"   vm: {execution['vmId']}", highlight=False)
+
+
+def _display_step(current: object, total: int, status: str) -> int:
+    if status == "completed":
+        return total
+    value = _integer(current, default=0)
+    return min(value + 1, total) if total else value + 1
+
+
+def _integer(value: object, *, default: int) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default

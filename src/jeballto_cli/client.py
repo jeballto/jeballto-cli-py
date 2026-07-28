@@ -13,6 +13,7 @@ JSONValue = dict[str, Any] | list[Any] | str | int | float | bool | bytes | None
 ResourceSize = str | int
 REQUEST_TIMEOUT_CUSHION = 30.0
 VM_EXECUTE_MAX_TIMEOUT = 600
+IMAGE_OPERATION_MAX_TIMEOUT = 604_800
 
 
 def _operation_request_timeout(
@@ -27,6 +28,30 @@ def _operation_request_timeout(
     if max_timeout is not None and timeout > max_timeout:
         raise ValueError(f"timeout must be between 1 and {max_timeout} seconds")
     return timeout + REQUEST_TIMEOUT_CUSHION
+
+
+def _combine_image_operation_cancellations(*responses: JSONValue) -> JSONValue:
+    """Combine typed image operation cancellation responses."""
+    cancelled = 0
+    tasks_cancelled = 0
+    operations: list[Any] = []
+    for response in responses:
+        if not isinstance(response, dict):
+            continue
+        raw_cancelled = response.get("cancelled")
+        raw_tasks_cancelled = response.get("tasksCancelled")
+        raw_operations = response.get("operations")
+        if isinstance(raw_cancelled, int):
+            cancelled += raw_cancelled
+        if isinstance(raw_tasks_cancelled, int):
+            tasks_cancelled += raw_tasks_cancelled
+        if isinstance(raw_operations, list):
+            operations.extend(raw_operations)
+    return {
+        "cancelled": cancelled,
+        "tasksCancelled": tasks_cancelled,
+        "operations": operations,
+    }
 
 
 class APIError(Exception):
@@ -44,12 +69,14 @@ class APIError(Exception):
         status_code: int,
         code: str,
         message: str,
-        details: dict[str, str] | None = None,
+        details: dict[str, Any] | None = None,
+        payload: JSONValue = None,
     ) -> None:
         self.status_code = status_code
         self.code = code
         self.message = message
         self.details = details
+        self.payload = payload
         super().__init__(message)
 
     def __str__(self) -> str:
@@ -80,7 +107,7 @@ class JeballtoClient:
 
         self._client = httpx.Client(
             base_url=settings.base_url,
-            timeout=settings.timeout,
+            timeout=httpx.Timeout(settings.request_timeout, connect=10.0),
             verify=not settings.insecure,
             headers=headers,
             transport=transport,
@@ -109,7 +136,7 @@ class JeballtoClient:
         *,
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
-        expected_status: int | set[int] | None = None,
+        expected_status: int | set[int] = 200,
         expect_binary: bool = False,
         headers: dict[str, str] | None = None,
         request_timeout: float | None = None,
@@ -127,7 +154,7 @@ class JeballtoClient:
             request_timeout: Optional HTTP transport timeout in seconds.
 
         Returns:
-            Parsed JSON, raw bytes, plain text, or ``None`` for 204 responses.
+            Parsed JSON, raw bytes, or ``None`` for 204 responses.
 
         Raises:
             APIError: On network errors or non-2xx responses.
@@ -143,7 +170,7 @@ class JeballtoClient:
                 "headers": request_headers,
             }
             if request_timeout is not None:
-                kwargs["timeout"] = request_timeout
+                kwargs["timeout"] = httpx.Timeout(request_timeout, connect=10.0)
             response = self._client.request(**kwargs)
         except httpx.TimeoutException as exc:
             details = None
@@ -163,18 +190,16 @@ class JeballtoClient:
                 details=None,
             ) from exc
 
-        if response.status_code >= 400:
+        allowed = {expected_status} if isinstance(expected_status, int) else expected_status
+        if response.status_code not in allowed and not 200 <= response.status_code < 300:
             raise self._api_error(response)
-
-        if expected_status is not None:
-            allowed = {expected_status} if isinstance(expected_status, int) else expected_status
-            if response.status_code not in allowed:
-                raise APIError(
-                    status_code=response.status_code,
-                    code="UNEXPECTED_STATUS",
-                    message=(f"Expected status {sorted(allowed)}, got {response.status_code}"),
-                    details=None,
-                )
+        if response.status_code not in allowed:
+            raise APIError(
+                status_code=response.status_code,
+                code="UNEXPECTED_STATUS",
+                message=(f"Expected status {sorted(allowed)}, got {response.status_code}"),
+                details=None,
+            )
 
         if expect_binary:
             return response.content
@@ -183,10 +208,21 @@ class JeballtoClient:
             return None
 
         content_type = response.headers.get("content-type", "")
-        if "application/json" in content_type:
+        media_type = content_type.partition(";")[0].strip().casefold()
+        if media_type != "application/json" and not media_type.endswith("+json"):
+            raise APIError(
+                status_code=response.status_code,
+                code="INVALID_RESPONSE",
+                message=f"Agent returned an unexpected content type: {content_type or 'missing'}",
+            )
+        try:
             return response.json()
-
-        return response.text
+        except ValueError as exc:
+            raise APIError(
+                status_code=response.status_code,
+                code="INVALID_RESPONSE",
+                message="Agent returned malformed JSON",
+            ) from exc
 
     def _api_error(self, response: httpx.Response) -> APIError:
         """Parse an error response into an ``APIError``.
@@ -199,7 +235,7 @@ class JeballtoClient:
         """
         code = f"HTTP_{response.status_code}"
         message = response.reason_phrase or "Request failed"
-        details: dict[str, str] | None = None
+        details: dict[str, Any] | None = None
 
         try:
             payload = response.json()
@@ -219,13 +255,14 @@ class JeballtoClient:
 
                 raw_details = error_obj.get("details")
                 if isinstance(raw_details, dict):
-                    details = {str(k): str(v) for k, v in raw_details.items()}
+                    details = {str(k): v for k, v in raw_details.items()}
 
         return APIError(
             status_code=response.status_code,
             code=code,
             message=message,
             details=details,
+            payload=payload,
         )
 
     # -- health & config ----------------------------------------------------
@@ -464,6 +501,7 @@ class JeballtoClient:
         disk: ResourceSize | None = None,
         force: bool = False,
         ephemeral: bool | None = None,
+        lifetime_seconds: int | None = None,
     ) -> JSONValue:
         """Clone a virtual machine.
 
@@ -474,6 +512,8 @@ class JeballtoClient:
             memory: Override memory size (e.g. "8GB").
             disk: Override disk size (e.g. "64GB").
             force: Auto-stop the source VM if it is running.
+            ephemeral: Whether the clone should be disposable.
+            lifetime_seconds: Maximum clone lifetime after its first start.
 
         Returns:
             Cloned VM details.
@@ -490,6 +530,8 @@ class JeballtoClient:
             body["resources"] = resources
         if ephemeral is not None:
             body["ephemeral"] = ephemeral
+        if lifetime_seconds is not None:
+            body["lifetimeSeconds"] = lifetime_seconds
         params: dict[str, Any] = {}
         if force:
             params["force"] = "true"
@@ -517,7 +559,7 @@ class JeballtoClient:
             command: Shell command to run.
             user: SSH user (default ``admin``).
             password: SSH password.
-            timeout: Command timeout in seconds.
+            timeout: Command timeout in seconds. If omitted, the agent uses its default.
 
         Returns:
             Dict with ``exitCode``, ``stdout``, and ``stderr``.
@@ -595,7 +637,7 @@ class JeballtoClient:
             vm_id: VM identifier (UUID).
 
         Returns:
-            Dict with host, port, status, and user.
+            Dict with host, port, and status.
         """
         return self.request("GET", f"/vms/{vm_id}/ssh")
 
@@ -780,21 +822,142 @@ class JeballtoClient:
         """
         return self.request("DELETE", "/images", params={"confirm": "true"})
 
-    def pull_image(self, reference: str, *, timeout: int | None = None) -> JSONValue:
+    def pull_image(
+        self,
+        reference: str,
+        *,
+        timeout: int | None = None,
+        async_: bool = False,
+    ) -> JSONValue:
         """Pull an OCI image from a registry.
 
         Args:
             reference: Image reference (e.g. ``registry.example.com/image:tag``).
             timeout: Optional timeout in seconds.
+            async_: Start the operation in the background.
 
         Returns:
-            Pull result dict with reference, status, digest, and image.
+            Image operation status dict.
         """
         body: dict[str, Any] = {"reference": reference}
         if timeout is not None:
+            _operation_request_timeout(timeout, max_timeout=IMAGE_OPERATION_MAX_TIMEOUT)
             body["timeout"] = timeout
-        request_timeout = _operation_request_timeout(timeout)
-        return self.request("POST", "/images/pull", json_body=body, request_timeout=request_timeout)
+        if async_:
+            body["async"] = True
+        request_timeout = (
+            None
+            if async_
+            else _operation_request_timeout(
+                timeout,
+                max_timeout=IMAGE_OPERATION_MAX_TIMEOUT,
+            )
+        )
+        return self.request(
+            "POST",
+            "/images/pull",
+            json_body=body,
+            expected_status=202 if async_ else 200,
+            request_timeout=request_timeout,
+        )
+
+    def list_image_operations(
+        self,
+        *,
+        type_: str | None = None,
+        active_only: bool = True,
+    ) -> JSONValue:
+        """List asynchronous image operations.
+
+        Args:
+            type_: Optional operation type, ``pull`` or ``push``.
+            active_only: Whether to show only non-terminal operations.
+
+        Returns:
+            Dict with operations, total, activeOnly, and optional type.
+        """
+        if type_ is not None:
+            return self._list_typed_image_operations(type_, active_only=active_only)
+
+        pull_data = self._list_typed_image_operations("pull", active_only=active_only)
+        push_data = self._list_typed_image_operations("push", active_only=active_only)
+        operations = []
+        if isinstance(pull_data, dict) and isinstance(pull_data.get("operations"), list):
+            operations.extend(pull_data["operations"])
+        if isinstance(push_data, dict) and isinstance(push_data.get("operations"), list):
+            operations.extend(push_data["operations"])
+        operations.sort(
+            key=lambda item: str(item.get("startedAt", "")) if isinstance(item, dict) else "",
+            reverse=True,
+        )
+        return {
+            "operations": operations,
+            "total": len(operations),
+            "activeOnly": active_only,
+            "type": None,
+        }
+
+    def _list_typed_image_operations(self, type_: str, *, active_only: bool) -> JSONValue:
+        """List image operations for one operation type."""
+        return self.request(
+            "GET",
+            f"/images/{type_}/operations",
+            params={"activeOnly": str(active_only).lower()},
+        )
+
+    def image_operation(self, operation_id: str, *, type_: str | None = None) -> JSONValue:
+        """Get status for an asynchronous image operation.
+
+        Args:
+            operation_id: Image operation ID.
+            type_: Optional operation type, ``pull`` or ``push``.
+
+        Returns:
+            Image operation status dict.
+        """
+        if type_ is not None:
+            return self.request("GET", f"/images/{type_}/operations/{operation_id}")
+        try:
+            return self.image_operation(operation_id, type_="pull")
+        except APIError as exc:
+            if exc.status_code != 404:
+                raise
+        return self.image_operation(operation_id, type_="push")
+
+    def cancel_image_operation(self, operation_id: str, *, type_: str | None = None) -> JSONValue:
+        """Cancel an asynchronous image operation.
+
+        Args:
+            operation_id: Image operation ID.
+            type_: Optional operation type, ``pull`` or ``push``.
+
+        Returns:
+            Terminal image operation status dict.
+        """
+        if type_ is not None:
+            return self.request("DELETE", f"/images/{type_}/operations/{operation_id}")
+        try:
+            return self.cancel_image_operation(operation_id, type_="pull")
+        except APIError as exc:
+            if exc.status_code != 404:
+                raise
+        return self.cancel_image_operation(operation_id, type_="push")
+
+    def cancel_image_operations(self, *, type_: str | None = None) -> JSONValue:
+        """Cancel active asynchronous image operations.
+
+        Args:
+            type_: Optional operation type, ``pull`` or ``push``.
+
+        Returns:
+            Dict with cancellation counts and final operation statuses.
+        """
+        if type_ is not None:
+            return self.request("DELETE", f"/images/{type_}/operations")
+
+        pull_data = self.request("DELETE", "/images/pull/operations")
+        push_data = self.request("DELETE", "/images/push/operations")
+        return _combine_image_operation_cancellations(pull_data, push_data)
 
     def push_image(
         self,
@@ -802,6 +965,7 @@ class JeballtoClient:
         *,
         source: str,
         timeout: int | None = None,
+        async_: bool = False,
     ) -> JSONValue:
         """Push an image to an OCI registry.
 
@@ -809,15 +973,32 @@ class JeballtoClient:
             reference: Target image reference.
             source: Push source in the format ``'vm:<uuid>'`` or ``'image:<uuid>'``.
             timeout: Optional timeout in seconds.
+            async_: Start the operation in the background.
 
         Returns:
-            Push result dict with reference, status, digest, and image.
+            Image operation status dict.
         """
         body: dict[str, Any] = {"reference": reference, "source": source}
         if timeout is not None:
+            _operation_request_timeout(timeout, max_timeout=IMAGE_OPERATION_MAX_TIMEOUT)
             body["timeout"] = timeout
-        request_timeout = _operation_request_timeout(timeout)
-        return self.request("POST", "/images/push", json_body=body, request_timeout=request_timeout)
+        if async_:
+            body["async"] = True
+        request_timeout = (
+            None
+            if async_
+            else _operation_request_timeout(
+                timeout,
+                max_timeout=IMAGE_OPERATION_MAX_TIMEOUT,
+            )
+        )
+        return self.request(
+            "POST",
+            "/images/push",
+            json_body=body,
+            expected_status=202 if async_ else 200,
+            request_timeout=request_timeout,
+        )
 
     # -- registries ---------------------------------------------------------
 
@@ -939,7 +1120,8 @@ class JeballtoClient:
     def cancel_jeballtofile(self, execution_id: str) -> JSONValue:
         """Request cancellation of a running Jeballtofile execution.
 
-        The current step will finish before execution halts.
+        The agent marks the run and current step as cancelled, then requests
+        cooperative task cancellation.
 
         Args:
             execution_id: Execution identifier (UUID).
@@ -969,4 +1151,13 @@ class JeballtoClient:
             "/system/reset",
             json_body={"mode": mode},
             params={"confirm": "true"},
+            expected_status={200, 500},
         )
+
+    def system_capabilities(self) -> JSONValue:
+        """Get host and feature capabilities.
+
+        Returns:
+            Dict with host capability metadata and feature capability rows.
+        """
+        return self.request("GET", "/system/capabilities")
