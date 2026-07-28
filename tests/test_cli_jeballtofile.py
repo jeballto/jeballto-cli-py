@@ -1,4 +1,4 @@
-"""Tests for jeballtofile commands."""
+"""Tests for Jeballtofile run commands."""
 
 from __future__ import annotations
 
@@ -13,43 +13,57 @@ from jeballto_cli.cli import app
 from tests.conftest import JEBALLTOFILE_RESPONSE
 
 EXECUTION_ID = JEBALLTOFILE_RESPONSE["id"]
+STEPS = '[{"type":"start"},{"type":"execute","command":"echo hello"}]'
 
 
-def test_jeballtofile_run(invoke: Any) -> None:
-    """Run a Jeballtofile execution."""
-    result = invoke(
-        [
-            "--output",
-            "json",
-            "jeballtofile",
-            "run",
-            "my-vm",
-            "--steps",
-            '[{"type":"start"},{"type":"execute","command":"echo hello"}]',
-        ]
-    )
+def test_run_submit_waits_by_default(invoke: Any) -> None:
+    """Submit watches the run and prints its terminal payload by default."""
+    result = invoke(["--output", "json", "run", "submit", "my-vm", "--steps", STEPS])
+
     assert result.exit_code == 0
-    assert EXECUTION_ID in result.output
+    payload = json.loads(result.stdout)
+    assert payload["id"] == EXECUTION_ID
+    assert payload["status"] == "completed"
+    assert result.stderr == ""
 
 
-def test_jeballtofile_run_from_json_file(invoke: Any, tmp_path: Any) -> None:
-    """Run execution from a JSON Jeballtofile."""
+def test_run_submit_human_progress_uses_stderr(invoke: Any) -> None:
+    """Human progress stays on stderr while the final result uses stdout."""
+    result = invoke(["run", "submit", "my-vm", "--steps", STEPS])
+
+    assert result.exit_code == 0
+    assert "Run Result" in result.stdout
+    assert "completed" in result.stdout
+    assert "Jeballtofile: completed" in result.stderr
+
+
+def test_run_submit_detach_returns_execution_id(invoke: Any) -> None:
+    """Detached submission returns the active run without polling."""
+    result = invoke(["--output", "json", "run", "submit", "my-vm", "--steps", STEPS, "--detach"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["id"] == EXECUTION_ID
+    assert payload["status"] == "running"
+    assert result.stderr == ""
+
+
+def test_run_submit_from_json_file(invoke: Any, tmp_path: Any) -> None:
+    """Submit a JSON Jeballtofile."""
     file_path = tmp_path / "Jeballtofile.json"
     file_path.write_text(
-        (
-            '{"name":"json-file-vm","steps":[{"type":"start"},'
-            '{"type":"execute","command":"echo hello"}]}'
-        ),
+        '{"name":"json-file-vm","steps":' + STEPS + "}",
         encoding="utf-8",
     )
 
-    result = invoke(["--output", "json", "jeballtofile", "run", "--file", str(file_path)])
+    result = invoke(["--output", "json", "run", "submit", "--file", str(file_path)])
+
     assert result.exit_code == 0
-    assert EXECUTION_ID in result.output
+    assert json.loads(result.stdout)["status"] == "completed"
 
 
-def test_jeballtofile_run_from_yaml_file(invoke: Any, tmp_path: Any) -> None:
-    """Run execution from a YAML Jeballtofile."""
+def test_run_submit_from_yaml_file(invoke: Any, tmp_path: Any) -> None:
+    """Submit a YAML Jeballtofile."""
     file_path = tmp_path / "Jeballtofile.yaml"
     file_path.write_text(
         (
@@ -62,143 +76,220 @@ def test_jeballtofile_run_from_yaml_file(invoke: Any, tmp_path: Any) -> None:
         encoding="utf-8",
     )
 
-    result = invoke(["--output", "json", "jeballtofile", "run", "--file", str(file_path)])
+    result = invoke(["--output", "json", "run", "submit", "--file", str(file_path)])
+
     assert result.exit_code == 0
-    assert EXECUTION_ID in result.output
+    assert json.loads(result.stdout)["status"] == "completed"
 
 
-def test_jeballtofile_json_file_preserves_integer_resources(
+@pytest.mark.parametrize("suffix", ["json", "yaml"])
+def test_run_file_preserves_integer_resources(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
+    suffix: str,
 ) -> None:
-    """Run from JSON file keeps byte resource values as integers."""
+    """File resource sizes remain integer byte counts in the API request."""
     captured: list[dict[str, Any]] = []
+    file_path = tmp_path / f"Jeballtofile.{suffix}"
+    if suffix == "json":
+        file_path.write_text(
+            json.dumps(
+                {
+                    "name": "file-vm",
+                    "resources": {
+                        "cpuCount": 4,
+                        "memorySize": 8589934592,
+                        "diskSize": 68719476736,
+                    },
+                    "steps": [{"type": "start"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+    else:
+        file_path.write_text(
+            (
+                "name: file-vm\n"
+                "resources:\n"
+                "  cpuCount: 4\n"
+                "  memorySize: 8589934592\n"
+                "  diskSize: 68719476736\n"
+                "steps:\n"
+                "  - type: start\n"
+            ),
+            encoding="utf-8",
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(202, json=JEBALLTOFILE_RESPONSE)
+
+    result = _invoke_with_handler(
+        monkeypatch,
+        ["--output", "json", "run", "submit", "--file", str(file_path), "--detach"],
+        handler,
+    )
+
+    assert result.exit_code == 0
+    assert captured[0]["resources"] == {
+        "cpuCount": 4,
+        "memorySize": 8589934592,
+        "diskSize": 68719476736,
+    }
+
+
+def test_run_submit_rejects_invalid_steps_json(invoke: Any) -> None:
+    """Submit fails when --steps JSON is invalid."""
+    result = invoke(["run", "submit", "my-vm", "--steps", "{bad json}"])
+
+    assert result.exit_code != 0
+    assert result.stdout == ""
+    assert "Invalid steps JSON" in result.stderr
+
+
+def test_run_submit_requires_one_blueprint_source(invoke: Any, tmp_path: Any) -> None:
+    """Submit requires exactly one of inline steps and a file."""
     file_path = tmp_path / "Jeballtofile.json"
-    file_path.write_text(
-        json.dumps(
-            {
-                "name": "json-file-vm",
-                "resources": {"cpuCount": 4, "memorySize": 8589934592, "diskSize": 68719476736},
-                "steps": [{"type": "start"}],
-            }
-        ),
-        encoding="utf-8",
+    file_path.write_text('{"name":"vm","steps":[{"type":"start"}]}', encoding="utf-8")
+
+    missing = invoke(["run", "submit", "my-vm"])
+    both = invoke(
+        ["run", "submit", "my-vm", "--steps", '[{"type":"start"}]', "--file", str(file_path)]
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured.append(json.loads(request.content))
-        return httpx.Response(
-            status_code=202,
-            headers={"content-type": "application/json"},
-            content=json.dumps(JEBALLTOFILE_RESPONSE).encode(),
-        )
+    assert missing.exit_code != 0
+    assert both.exit_code != 0
+    assert "exactly one" in missing.stderr
+    assert "exactly one" in both.stderr
 
-    _patch_httpx_client(monkeypatch, handler)
-    result = CliRunner().invoke(
-        app,
-        ["--output", "json", "jeballtofile", "run", "--file", str(file_path)],
-    )
+
+def test_run_submit_rejects_empty_steps(invoke: Any) -> None:
+    """A blueprint must contain at least one step object."""
+    empty = invoke(["run", "submit", "my-vm", "--steps", "[]"])
+    scalar = invoke(["run", "submit", "my-vm", "--steps", '["start"]'])
+
+    assert empty.exit_code != 0
+    assert scalar.exit_code != 0
+    assert "non-empty steps array" in empty.stderr
+    assert "must be an object" in scalar.stderr
+
+
+def test_run_list_preserves_machine_envelope(invoke: Any) -> None:
+    """Run list keeps executions and total in structured output."""
+    result = invoke(["--output", "json", "run", "list"])
 
     assert result.exit_code == 0
-    assert captured[0]["resources"]["memorySize"] == 8589934592
-    assert captured[0]["resources"]["diskSize"] == 68719476736
+    payload = json.loads(result.stdout)
+    assert payload["executions"][0]["id"] == EXECUTION_ID
+    assert payload["total"] == 1
 
 
-def test_jeballtofile_yaml_file_preserves_integer_resources(
+def test_run_get_uses_one_based_human_progress(invoke: Any) -> None:
+    """Completed runs display all steps without exposing zero-based indexes."""
+    result = invoke(["run", "get", EXECUTION_ID])
+
+    assert result.exit_code == 0
+    assert "completed (2/2)" in result.stdout
+    assert "1. start" in result.stdout
+    assert "2. execute" in result.stdout
+
+
+def test_run_wait(invoke: Any) -> None:
+    """Wait observes an already submitted run."""
+    result = invoke(["--output", "json", "run", "wait", EXECUTION_ID])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["status"] == "completed"
+
+
+@pytest.mark.parametrize("terminal_status", ["failed", "cancelled"])
+def test_run_non_success_terminal_state_returns_one(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Any,
+    terminal_status: str,
 ) -> None:
-    """Run from YAML file keeps byte resource values as integers."""
-    captured: list[dict[str, Any]] = []
-    file_path = tmp_path / "Jeballtofile.yaml"
-    file_path.write_text(
-        (
-            "name: yaml-file-vm\n"
-            "resources:\n"
-            "  cpuCount: 4\n"
-            "  memorySize: 8589934592\n"
-            "  diskSize: 68719476736\n"
-            "steps:\n"
-            "  - type: start\n"
-        ),
-        encoding="utf-8",
-    )
+    """Failed and cancelled submitted runs return a nonzero exit status."""
+    final = {
+        **JEBALLTOFILE_RESPONSE,
+        "status": terminal_status,
+        "currentStep": 0,
+        "error": "step did not complete" if terminal_status == "failed" else None,
+    }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        captured.append(json.loads(request.content))
-        return httpx.Response(
-            status_code=202,
-            headers={"content-type": "application/json"},
-            content=json.dumps(JEBALLTOFILE_RESPONSE).encode(),
-        )
+        if request.method == "POST":
+            return httpx.Response(202, json=JEBALLTOFILE_RESPONSE)
+        return httpx.Response(200, json=final)
 
-    _patch_httpx_client(monkeypatch, handler)
-    result = CliRunner().invoke(
-        app,
-        ["--output", "json", "jeballtofile", "run", "--file", str(file_path)],
+    result = _invoke_with_handler(
+        monkeypatch,
+        ["--output", "json", "run", "submit", "my-vm", "--steps", STEPS],
+        handler,
     )
 
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["status"] == terminal_status
+
+
+def test_run_cancel_waits_by_default(invoke: Any) -> None:
+    """Cancellation waits for the cooperative terminal response by default."""
+    result = invoke(["--output", "json", "run", "cancel", EXECUTION_ID])
+
     assert result.exit_code == 0
-    assert captured[0]["resources"]["memorySize"] == 8589934592
-    assert captured[0]["resources"]["diskSize"] == 68719476736
+    assert json.loads(result.stdout)["status"] == "completed"
 
 
-def test_jeballtofile_run_invalid_steps_json(invoke: Any) -> None:
-    """Run fails when --steps JSON is invalid."""
-    result = invoke(["jeballtofile", "run", "my-vm", "--steps", "{bad json}"])
+def test_run_cancel_detach_returns_request(invoke: Any) -> None:
+    """Detached cancellation returns after the API accepts the request."""
+    result = invoke(["--output", "json", "run", "cancel", EXECUTION_ID, "--detach"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["success"] is True
+
+
+def test_run_delete_confirmed(invoke: Any) -> None:
+    """Delete a finished run with --yes."""
+    result = invoke(["run", "delete", EXECUTION_ID, "--yes"])
+
+    assert result.exit_code == 0
+    assert "Done" in result.stdout or "deleted" in result.stdout.lower()
+
+
+def test_run_delete_requires_yes_without_tty(invoke: Any) -> None:
+    """Deletion fails safely without confirmation in non-interactive mode."""
+    result = invoke(["run", "delete", EXECUTION_ID])
+
     assert result.exit_code != 0
+    assert result.stdout == ""
+    assert "--yes" in result.stderr
 
 
-def test_jeballtofile_list(invoke: Any) -> None:
-    """List executions."""
-    result = invoke(["--output", "json", "jeballtofile", "list"])
-    assert result.exit_code == 0
-    assert EXECUTION_ID in result.output
+def test_run_help_and_leftovers(invoke: Any) -> None:
+    """Root help exposes run while the old Jeballtofile hierarchy is gone."""
+    root_help = invoke(["--help"])
+    run_help = invoke(["run", "--help"])
+    leftover = invoke(["jeballtofile", "run"])
+
+    assert root_help.exit_code == 0
+    assert "run" in root_help.stdout
+    assert run_help.exit_code == 0
+    for command in ("submit", "list", "get", "wait", "cancel", "delete"):
+        assert command in run_help.stdout
+    assert leftover.exit_code != 0
 
 
-def test_jeballtofile_ls_alias(invoke: Any) -> None:
-    """The 'ls' alias works."""
-    result = invoke(["jeballtofile", "ls"])
-    assert result.exit_code == 0
-
-
-def test_jeballtofile_get(invoke: Any) -> None:
-    """Get execution status."""
-    result = invoke(["jeballtofile", "get", EXECUTION_ID])
-    assert result.exit_code == 0
-    assert "completed" in result.output.lower()
-
-
-def test_jeballtofile_delete_confirmed(invoke: Any) -> None:
-    """Delete execution with --yes."""
-    result = invoke(["jeballtofile", "delete", EXECUTION_ID, "--yes"])
-    assert result.exit_code == 0
-    assert "done" in result.output.lower() or "deleted" in result.output.lower()
-
-
-def test_jeballtofile_delete_abort(invoke: Any) -> None:
-    """Delete without --yes can be aborted."""
-    result = invoke(["jeballtofile", "delete", EXECUTION_ID], input="n\n")
-    assert result.exit_code != 0
-
-
-def test_jeballtofile_cancel(invoke: Any) -> None:
-    """Cancel execution."""
-    result = invoke(["jeballtofile", "cancel", EXECUTION_ID])
-    assert result.exit_code == 0
-    assert "done" in result.output.lower() or "cancellation" in result.output.lower()
-
-
-def _patch_httpx_client(
+def _invoke_with_handler(
     monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
     handler: Any,
-) -> None:
+) -> Any:
+    """Invoke the CLI against one local mock handler."""
     monkeypatch.setenv("JEBALLTO_BASE_URL", "http://test:8011/v1")
     monkeypatch.setenv("JEBALLTO_TOKEN", "test-token")
-    orig_init = httpx.Client.__init__
+    original_init = httpx.Client.__init__
 
     def patched_init(self: httpx.Client, **kwargs: Any) -> None:
         kwargs["transport"] = httpx.MockTransport(handler)
-        orig_init(self, **kwargs)
+        original_init(self, **kwargs)
 
     monkeypatch.setattr(httpx.Client, "__init__", patched_init)
+    return CliRunner().invoke(app, args)

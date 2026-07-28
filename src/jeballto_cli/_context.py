@@ -8,7 +8,7 @@ import typer
 from rich.console import Console
 
 from jeballto_cli.client import JeballtoClient
-from jeballto_cli.settings import Settings
+from jeballto_cli.settings import OutputFormat, Settings
 
 
 @dataclass
@@ -17,12 +17,29 @@ class CliContext:
 
     Attributes:
         settings: Resolved application settings.
-        console: Rich console used for all output.
+        console: Rich console used for command results on stdout.
+        error_console: Rich console used for progress and diagnostics on stderr.
     """
 
     settings: Settings
     console: Console
+    error_console: Console
     _client: JeballtoClient | None = field(default=None, repr=False)
+
+    @property
+    def is_human(self) -> bool:
+        """Return whether output is intended for a person."""
+        return self.settings.output == OutputFormat.HUMAN
+
+    @property
+    def human_output(self) -> bool:
+        """Return whether concise human-readable output is active."""
+        return self.is_human and not self.settings.details
+
+    @property
+    def progress_enabled(self) -> bool:
+        """Return whether animated progress is safe and useful."""
+        return self.is_human and self.error_console.is_terminal
 
     @property
     def client(self) -> JeballtoClient:

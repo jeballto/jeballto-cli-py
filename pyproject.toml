@@ -3,16 +3,19 @@ name = "jeballto-cli"
 version = "1.0.0b1"
 description = "Modern CLI for the Jeballto VM Agent API"
 readme = "README.md"
-requires-python = ">=3.14"
-license = { text = "MIT" }
+requires-python = ">=3.11"
+license = "MPL-2.0"
 keywords = ["jeballto", "cli", "virtual-machine", "automation"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
   "Operating System :: MacOS",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Topic :: System :: Systems Administration",
   "Topic :: Utilities",
@@ -49,7 +52,7 @@ build-backend = "hatchling.build"
 packages = ["src/jeballto_cli"]
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
@@ -59,7 +62,7 @@ select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.11"
 warn_unused_configs = true
 warn_unused_ignores = true
 disallow_untyped_defs = true

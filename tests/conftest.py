@@ -26,22 +26,40 @@ VM_RESPONSE = {
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "name": "test-vm",
     "state": "stopped",
-    "resources": {"cpuCount": 4, "memorySize": "8GB", "diskSize": "64GB"},
-    "network": {"macAddress": "aa:bb:cc:dd:ee:ff"},
+    "resources": {
+        "cpuCount": 4,
+        "memorySize": 8 * 1024**3,
+        "diskSize": 64 * 1024**3,
+    },
+    "network": {
+        "macAddress": "aa:bb:cc:dd:ee:ff",
+        "sshPort": None,
+        "vncPort": None,
+        "natIP": None,
+    },
     "guiOpen": False,
     "ephemeral": False,
+    "uptime": None,
+    "lifetimeSeconds": None,
+    "expiresAt": None,
     "createdAt": "2026-01-01T00:00:00Z",
+    "updatedAt": "2026-01-01T00:00:00Z",
 }
 
 AUTH_VERIFY_RESPONSE = {"status": "ok"}
 
-VM_LIST_RESPONSE = {"vms": [VM_RESPONSE], "total": 1, "limit": None, "offset": None}
+VM_LIST_RESPONSE = {"vms": [VM_RESPONSE], "total": 1, "limit": 100, "offset": 0}
 
 VM_STATE_RESPONSE = {"state": "running", "uptime": 120}
 
 EVENTS_RESPONSE = {
     "events": [
-        {"timestamp": "2026-01-01T00:00:00Z", "type": "VM_CREATED", "vmId": VM_RESPONSE["id"]},
+        {
+            "timestamp": "2026-01-01T00:00:00Z",
+            "type": "VM_CREATED",
+            "vmId": VM_RESPONSE["id"],
+            "data": {"name": VM_RESPONSE["name"]},
+        },
     ],
     "total": 1,
 }
@@ -51,6 +69,8 @@ EXECUTE_RESPONSE = {
     "exitCode": 0,
     "stdout": "hello\n",
     "stderr": "",
+    "stdoutTruncated": False,
+    "stderrTruncated": False,
 }
 
 KEYSTROKES_RESPONSE = {
@@ -65,47 +85,93 @@ IMAGE_RESPONSE = {
     "digest": "sha256:abc123",
     "localPath": "/path/to/image",
     "size": 1024000,
+    "resources": {
+        "cpuCount": 4,
+        "memorySize": 8 * 1024**3,
+        "diskSize": 64 * 1024**3,
+    },
+    "formatVersion": 1,
+    "pulledAt": "2026-01-01T00:00:00Z",
+    "pushedAt": None,
+    "metadata": {"source": "test"},
 }
 
-IMAGE_LIST_RESPONSE = {"images": [IMAGE_RESPONSE], "total": 1, "limit": None, "offset": None}
+IMAGE_LIST_RESPONSE = {"images": [IMAGE_RESPONSE], "total": 1, "limit": 100, "offset": 0}
 
-IMAGE_PULL_RESPONSE = {
+IMAGE_OPERATION_ID = "880e8400-e29b-41d4-a716-446655440000"
+
+IMAGE_OPERATION_RESPONSE = {
+    "operationId": IMAGE_OPERATION_ID,
+    "statusUrl": f"/v1/images/pull/operations/{IMAGE_OPERATION_ID}",
+    "type": "pull",
     "reference": "registry.example.com/image:latest",
-    "status": "pulled",
+    "source": None,
+    "status": "completed",
+    "stage": None,
+    "progress": 1.0,
+    "stageProgress": None,
+    "averageSpeedMBps": 12.5,
+    "chunksCompleted": 4,
+    "chunksTotal": 4,
+    "bytesCompleted": 1024000,
+    "bytesTotal": 1024000,
+    "startedAt": "2026-01-01T00:00:00Z",
+    "updatedAt": "2026-01-01T00:01:00Z",
+    "completedAt": "2026-01-01T00:01:00Z",
     "digest": "sha256:abc123",
     "image": IMAGE_RESPONSE,
+    "error": None,
 }
 
-IMAGE_PUSH_RESPONSE = {
-    "reference": "registry.example.com/image:latest",
-    "status": "pushed",
-    "digest": "sha256:abc123",
-    "image": IMAGE_RESPONSE,
-}
+WIPE_RESPONSE = {"deleted": 2, "failed": 0, "errors": None}
 
-WIPE_RESPONSE = {"deleted": 2, "failed": 0}
-
-SSH_INFO_RESPONSE = {"host": "localhost", "port": 2222, "status": "ready", "user": "admin"}
-VNC_INFO_RESPONSE = {"host": "localhost", "port": 5900, "status": "ready"}
+SSH_INFO_RESPONSE = {"host": "127.0.0.1", "port": 2222, "status": "ready"}
+VNC_INFO_RESPONSE = {"host": "127.0.0.1", "port": 5901, "status": "ready"}
+VNC_DISABLED_RESPONSE = {"host": "127.0.0.1", "port": None, "status": "disabled"}
 GUI_STATUS_RESPONSE = {"vmId": VM_RESPONSE["id"], "guiOpen": True}
+GUI_CLOSED_RESPONSE = {"vmId": VM_RESPONSE["id"], "guiOpen": False}
 
 INSTALL_STATUS_RESPONSE = {
     "vmId": VM_RESPONSE["id"],
     "status": "completed",
     "progress": 1.0,
+    "phaseProgress": 1.0,
     "message": "Installation complete.",
+    "phase": "completed",
+    "bytesDownloaded": 1024,
+    "bytesTotal": 1024,
+    "downloadSpeed": 1024,
 }
 
 CONFIG_RESPONSE = {
-    "api": {"port": 8011, "host": "0.0.0.0", "enableHTTPS": False},
-    "logging": {"level": "info"},
-    "networking": {"sshPortRangeStart": 2200, "sshPortRangeEnd": 2300},
+    "api": {"port": 8011, "host": "0.0.0.0", "maxConcurrentRequests": 100},
+    "logging": {
+        "level": "info",
+        "enableFileLogging": True,
+        "retentionDays": 7,
+        "maxTotalSize": "2GB",
+        "timezone": None,
+    },
+    "networking": {
+        "sshPortRangeStart": 2200,
+        "sshPortRangeEnd": 2300,
+        "autoEnableSSHForwarding": True,
+        "vncPortRangeStart": 5901,
+        "vncPortRangeEnd": 5902,
+    },
+    "images": {
+        "defaultRegistry": None,
+        "insecureRegistries": [],
+        "maxParallelImageBlobTransfers": 16,
+        "maxParallelImageCompressions": 4,
+        "maxParallelImageDecompressions": 2,
+        "maxParallelImageDiskWrites": 1,
+    },
 }
 
 REGISTRY_LOGIN_RESPONSE = {
     "registry": "registry.example.com",
     "status": "authenticated",
-    "message": "Login succeeded.",
 }
 
 SUCCESS_RESPONSE = {"success": True, "message": "Done."}
@@ -123,7 +189,7 @@ JEBALLTOFILE_STATUS_RESPONSE = {
     "id": "770e8400-e29b-41d4-a716-446655440000",
     "vmId": VM_RESPONSE["id"],
     "status": "completed",
-    "currentStep": 2,
+    "currentStep": 1,
     "totalSteps": 2,
     "stepResults": [
         {"step": 0, "type": "start", "status": "completed", "message": None},
@@ -148,6 +214,35 @@ SYSTEM_RESET_RESPONSE = {
     "logsDeleted": False,
     "willTerminate": False,
     "errors": None,
+}
+
+SYSTEM_CAPABILITIES_RESPONSE = {
+    "host": {
+        "architecture": "arm64",
+        "macOSVersion": "26.5",
+        "virtualizationSupported": True,
+        "maxConcurrentVMs": 2,
+    },
+    "features": [
+        {
+            "id": "macOSVirtualization",
+            "status": "available",
+            "enabled": True,
+            "lifecycle": "stable",
+            "minimumOS": "26.0",
+            "deprecation": None,
+            "reason": None,
+        },
+        {
+            "id": "ociImagePackaging",
+            "status": "available",
+            "enabled": True,
+            "lifecycle": "development",
+            "minimumOS": "26.0",
+            "deprecation": None,
+            "reason": None,
+        },
+    ],
 }
 
 # -- route table type -------------------------------------------------------
@@ -177,11 +272,10 @@ DEFAULT_ROUTES: dict[tuple[str, str], tuple[Any, int]] = {
     ("GET", "/health"): (HEALTH_RESPONSE, 200),
     ("GET", "/config"): (CONFIG_RESPONSE, 200),
     ("PATCH", "/config"): (CONFIG_RESPONSE, 200),
+    ("GET", "/system/capabilities"): (SYSTEM_CAPABILITIES_RESPONSE, 200),
     ("POST", "/vms"): (VM_RESPONSE, 201),
     ("GET", "/vms"): (VM_LIST_RESPONSE, 200),
     ("DELETE", "/vms"): (WIPE_RESPONSE, 200),
-    ("POST", "/images/pull"): (IMAGE_PULL_RESPONSE, 200),
-    ("POST", "/images/push"): (IMAGE_PUSH_RESPONSE, 200),
     ("GET", "/images"): (IMAGE_LIST_RESPONSE, 200),
     ("DELETE", "/images"): (WIPE_RESPONSE, 200),
     ("POST", "/registries/login"): (REGISTRY_LOGIN_RESPONSE, 200),
@@ -208,12 +302,12 @@ DEFAULT_VM_ROUTES: dict[tuple[str, str], tuple[Any, int]] = {
     ("GET", "install/status"): (INSTALL_STATUS_RESPONSE, 200),
     ("GET", "ssh"): (SSH_INFO_RESPONSE, 200),
     ("POST", "ssh"): (SSH_INFO_RESPONSE, 200),
-    ("DELETE", "ssh"): ({"status": "disabled"}, 200),
+    ("DELETE", "ssh"): ({"host": "127.0.0.1", "port": None, "status": "disabled"}, 200),
     ("GET", "vnc"): (VNC_INFO_RESPONSE, 200),
     ("POST", "vnc"): (VNC_INFO_RESPONSE, 200),
-    ("DELETE", "vnc"): (VNC_INFO_RESPONSE, 200),
+    ("DELETE", "vnc"): (VNC_DISABLED_RESPONSE, 200),
     ("POST", "gui"): (GUI_STATUS_RESPONSE, 200),
-    ("DELETE", "gui"): (GUI_STATUS_RESPONSE, 200),
+    ("DELETE", "gui"): (GUI_CLOSED_RESPONSE, 200),
     ("GET", "gui"): (GUI_STATUS_RESPONSE, 200),
     ("GET", "screenshot"): (b"\x89PNG\r\n", 200),
     ("PATCH", "update"): (VM_RESPONSE, 200),
@@ -259,6 +353,31 @@ def _build_transport() -> httpx.MockTransport:
             data["logsDeleted"] = mode == "hard"
             return _json_response(data, 200)
 
+        if method == "POST" and path in {"/images/pull", "/images/push"}:
+            payload: dict[str, Any] = {}
+            if request.content:
+                loaded = json.loads(request.content)
+                if isinstance(loaded, dict):
+                    payload = loaded
+            is_pull = path == "/images/pull"
+            operation_data = dict(IMAGE_OPERATION_RESPONSE)
+            operation_data["type"] = "pull" if is_pull else "push"
+            operation_data["statusUrl"] = (
+                f"/v1/images/{'pull' if is_pull else 'push'}/operations/{IMAGE_OPERATION_ID}"
+            )
+            if not is_pull:
+                operation_data["source"] = f"vm:{VM_RESPONSE['id']}"
+                operation_data["stage"] = "uploading"
+            if payload.get("async") is True:
+                operation_data["status"] = "started"
+                operation_data["progress"] = 0.0
+                operation_data["stageProgress"] = 0.0 if not is_pull else None
+                operation_data["completedAt"] = None
+                operation_data["digest"] = None
+                operation_data["image"] = None
+                return _json_response(operation_data, 202)
+            return _json_response(operation_data, 200)
+
         # Exact match
         key = (method, path)
         if key in DEFAULT_ROUTES:
@@ -295,6 +414,44 @@ def _build_transport() -> httpx.MockTransport:
                     return httpx.Response(status_code=status)
                 return _json_response(data, status)
 
+        # Image operation routes: /images/{pull|push}/operations[/...]
+        if (
+            len(parts) >= 3
+            and parts[0] == "images"
+            and parts[1] in {"pull", "push"}
+            and parts[2] == "operations"
+        ):
+            operation_data = dict(IMAGE_OPERATION_RESPONSE)
+            operation_data["type"] = parts[1]
+            operation_data["statusUrl"] = f"/v1/images/{parts[1]}/operations/{IMAGE_OPERATION_ID}"
+            if parts[1] == "push":
+                operation_data["type"] = "push"
+                operation_data["source"] = f"vm:{VM_RESPONSE['id']}"
+                operation_data["stage"] = "uploading"
+            if len(parts) == 3 and method == "GET":
+                data = {
+                    "operations": [operation_data],
+                    "total": 1,
+                    "activeOnly": request.url.params.get("activeOnly", "true") != "false",
+                    "type": parts[1],
+                }
+                return _json_response(data, 200)
+            if len(parts) == 3 and method == "DELETE":
+                operation_data["status"] = "cancelled"
+                operation_data["error"] = "Cancelled by user."
+                data = {
+                    "cancelled": 1,
+                    "tasksCancelled": 1,
+                    "operations": [operation_data],
+                }
+                return _json_response(data, 200)
+            if len(parts) == 4 and method == "GET":
+                return _json_response(operation_data, 200)
+            if len(parts) == 4 and method == "DELETE":
+                operation_data["status"] = "cancelled"
+                operation_data["error"] = "Cancelled by user."
+                return _json_response(operation_data, 200)
+
         # Image routes: /images/{uuid}
         if len(parts) == 2 and parts[0] == "images":
             suffix = "get" if method == "GET" else "delete"
@@ -330,7 +487,7 @@ def runner() -> CliRunner:
     """Provide a Typer CLI test runner.
 
     Returns:
-        A CliRunner instance with mixed stderr disabled.
+        A CliRunner instance with separate stdout and stderr capture.
     """
     return CliRunner()
 
